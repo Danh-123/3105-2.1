@@ -4,65 +4,80 @@ on:
   workflow_dispatch:
     inputs:
       scheme:
-        description: 'Tên scheme trong Xcode project'
+        description: "Xcode scheme"
         required: true
-        default: '3105'
+        default: "3105"
 
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Install CocoaPods dependencies (neu co Podfile)
+      - name: Detect project
         run: |
-          if [ -f "Podfile" ]; then
-            pod install --repo-update
-          else
-            echo "Khong co Podfile, bo qua buoc nay"
-          fi
+          test -e "ThreeOneOSFive.xcodeproj"
+          echo "Project: ThreeOneOSFive.xcodeproj"
 
-      - name: List available schemes (debug)
+      - name: List schemes
         run: |
-          if ls -d *.xcworkspace 1> /dev/null 2>&1; then
-            xcodebuild -list -workspace $(ls -d *.xcworkspace | head -1)
-          else
-            xcodebuild -list -project $(ls -d *.xcodeproj | head -1)
-          fi
+          xcodebuild -list -project "ThreeOneOSFive.xcodeproj"
 
-      - name: Archive project
+      - name: Check shared scheme
         run: |
-          if ls -d *.xcworkspace 1> /dev/null 2>&1; then
-            xcodebuild archive \
-              -workspace $(ls -d *.xcworkspace | head -1) \
-              -scheme "${{ github.event.inputs.scheme }}" \
-              -configuration Release \
-              -archivePath build/App.xcarchive \
-              CODE_SIGNING_ALLOWED=NO
-          else
-            xcodebuild archive \
-              -project $(ls -d *.xcodeproj | head -1) \
-              -scheme "${{ github.event.inputs.scheme }}" \
-              -configuration Release \
-              -archivePath build/App.xcarchive \
-              CODE_SIGNING_ALLOWED=NO
+          SCHEME_FILE="ThreeOneOSFive.xcodeproj/xcshareddata/xcschemes/${{ inputs.scheme }}.xcscheme"
+          if [ ! -f "$SCHEME_FILE" ]; then
+            echo "ERROR: Shared scheme not found: $SCHEME_FILE"
+            exit 1
           fi
+          echo "Shared scheme found: $SCHEME_FILE"
+
+      - name: Archive unsigned app
+        run: |
+          xcodebuild archive \
+            -project "ThreeOneOSFive.xcodeproj" \
+            -scheme "${{ inputs.scheme }}" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$GITHUB_WORKSPACE/build/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Find built app
+        run: |
+          set -e
+          APP_PATH=$(find build/App.xcarchive/Products/Applications -maxdepth 1 -name "*.app" -type d -print -quit)
+          test -n "$APP_PATH"
+          echo "APP_PATH=$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Package unsigned IPA
+        shell: bash
         run: |
+          set -e
+          rm -rf build/Payload
           mkdir -p build/Payload
-          cp -r build/App.xcarchive/Products/Applications/*.app build/Payload/
+          cp -R "$APP_PATH" build/Payload/
+          APP_NAME=$(basename "$APP_PATH" .app)
           cd build
-          zip -r unsigned.ipa Payload
-          cd ..
+          ditto -c -k --sequesterRsrc --keepParent Payload "unsigned-$APP_NAME.ipa"
+          echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"
 
-      - name: Upload IPA artifact
+      - name: Verify IPA
+        run: |
+          ls -lh "build/unsigned-$APP_NAME.ipa"
+          unzip -l "build/unsigned-$APP_NAME.ipa" | head -30
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-ipa
-          path: build/unsigned.ipa
+          name: unsigned-${{ env.APP_NAME }}
+          path: build/unsigned-${{ env.APP_NAME }}.ipa
+          retention-days: 7
