@@ -45,16 +45,22 @@ jobs:
             -scheme "${{ inputs.scheme }}" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
             -archivePath "$GITHUB_WORKSPACE/build/App.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
       - name: Find built app
         run: |
           set -e
           APP_PATH=$(find build/App.xcarchive/Products/Applications -maxdepth 1 -name "*.app" -type d -print -quit)
-          test -n "$APP_PATH"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "FATAL: No .app found in archive!"
+            exit 1
+          fi
           echo "APP_PATH=$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
@@ -62,22 +68,56 @@ jobs:
         shell: bash
         run: |
           set -e
-          rm -rf build/Payload
-          mkdir -p build/Payload
-          cp -R "$APP_PATH" build/Payload/
+          PAYLOAD_DIR="build/Payload"
+          rm -rf "$PAYLOAD_DIR" build/*.ipa
+          mkdir -p "$PAYLOAD_DIR"
+          cp -R "$APP_PATH" "$PAYLOAD_DIR/"
           APP_NAME=$(basename "$APP_PATH" .app)
+          TARGET_APP="$PAYLOAD_DIR/$APP_NAME.app"
 
-          # Strip extended attributes and quarantine flags that cause codesign failures
-          xattr -cr build/Payload || true
+          # 1. Strip extended attributes and quarantine flags
+          xattr -cr "$PAYLOAD_DIR" 2>/dev/null || true
 
-          # Ensure full directory and executable permissions (+x) on application binary
-          chmod -R 755 build/Payload
-          if [ -f "build/Payload/$APP_NAME.app/$APP_NAME" ]; then
-            chmod +x "build/Payload/$APP_NAME.app/$APP_NAME"
+          # 2. Remove broken signature, macOS metadata, and DS_Store
+          rm -rf "$TARGET_APP/_CodeSignature"
+          find "$PAYLOAD_DIR" -name ".DS_Store" -delete 2>/dev/null || true
+
+          # 3. Ensure full directory and executable permissions (+x) on application binary
+          chmod -R 755 "$PAYLOAD_DIR"
+
+          MAIN_BIN="$TARGET_APP/$APP_NAME"
+          if [ ! -f "$MAIN_BIN" ]; then
+            PLIST_BIN=$(defaults read "$(pwd)/$TARGET_APP/Info.plist" CFBundleExecutable 2>/dev/null || plutil -extract CFBundleExecutable raw "$TARGET_APP/Info.plist" 2>/dev/null || echo "$APP_NAME")
+            if [ -f "$TARGET_APP/$PLIST_BIN" ]; then
+              MAIN_BIN="$TARGET_APP/$PLIST_BIN"
+            fi
           fi
-          find "build/Payload/$APP_NAME.app" -type f -perm +111 -exec chmod 755 {} + 2>/dev/null || true
 
-          # Package cleanly with zip preserving symlinks and excluding macOS metadata (__MACOSX / .DS_Store)
+          if [ ! -f "$MAIN_BIN" ]; then
+            echo "FATAL: Executable binary not found at $MAIN_BIN"
+            exit 1
+          fi
+
+          chmod +x "$MAIN_BIN"
+          find "$TARGET_APP" -type f -perm +111 -exec chmod 755 {} + 2>/dev/null || true
+
+          # Check binary size is non-empty
+          BIN_SIZE=$(stat -f%z "$MAIN_BIN" 2>/dev/null || stat -c%s "$MAIN_BIN" 2>/dev/null || echo 0)
+          if [ "$BIN_SIZE" -le 1000 ]; then
+            echo "FATAL: Binary $MAIN_BIN is invalid or empty ($BIN_SIZE bytes)!"
+            exit 1
+          fi
+          echo "Verified binary: $MAIN_BIN ($BIN_SIZE bytes)"
+
+          # 4. Ad-hoc (Fake) sign with codesign
+          # Generates valid Mach-O LC_CODE_SIGNATURE & CodeResources so tools like Sideloadly,
+          # 3uTools, Feather, Scarlet, and ESign can re-sign without Mach-O header errors.
+          echo "Applying ad-hoc signature to $TARGET_APP..."
+          codesign --force --deep --sign - "$TARGET_APP"
+          codesign --verify --deep --strict "$TARGET_APP"
+          echo "Ad-hoc code signing verified."
+
+          # 5. Clean packaging into standard IPA
           cd build
           rm -f "unsigned-$APP_NAME.ipa"
           zip -qry "unsigned-$APP_NAME.ipa" Payload -x "*.DS_Store" -x "__MACOSX*"
@@ -85,13 +125,40 @@ jobs:
 
       - name: Verify IPA
         run: |
-          ls -lh "build/unsigned-$APP_NAME.ipa"
-          unzip -l "build/unsigned-$APP_NAME.ipa" | head -30
-          if unzip -l "build/unsigned-$APP_NAME.ipa" | grep -i "__MACOSX"; then
-            echo "ERROR: __MACOSX resource forks detected in IPA!"
+          set -e
+          IPA_FILE="build/unsigned-$APP_NAME.ipa"
+          if [ ! -f "$IPA_FILE" ]; then
+            echo "FATAL: IPA file was not created: $IPA_FILE"
             exit 1
           fi
-          echo "IPA packaging verified: Clean archive with correct binary permissions."
+
+          IPA_SIZE=$(stat -f%z "$IPA_FILE" 2>/dev/null || stat -c%s "$IPA_FILE" 2>/dev/null || echo 0)
+          echo "IPA file: $IPA_FILE ($IPA_SIZE bytes)"
+          if [ "$IPA_SIZE" -lt 100000 ]; then
+            echo "FATAL: IPA size is abnormally small ($IPA_SIZE bytes). Build package is invalid!"
+            exit 1
+          fi
+
+          ls -lh "$IPA_FILE"
+          echo "--- IPA Structure (first 30 entries) ---"
+          unzip -l "$IPA_FILE" | head -30
+
+          if unzip -l "$IPA_FILE" | grep -i "__MACOSX"; then
+            echo "FATAL: __MACOSX resource forks detected in IPA!"
+            exit 1
+          fi
+
+          if ! unzip -l "$IPA_FILE" | grep -q "Payload/$APP_NAME.app/Info.plist"; then
+            echo "FATAL: Info.plist missing from IPA payload!"
+            exit 1
+          fi
+
+          if ! unzip -l "$IPA_FILE" | grep -q "Payload/$APP_NAME.app/_CodeSignature/CodeResources"; then
+            echo "FATAL: CodeResources missing from IPA payload!"
+            exit 1
+          fi
+
+          echo "IPA verification PASSED: Clean archive, valid binary permissions, and ad-hoc signed."
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
