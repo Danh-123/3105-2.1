@@ -103,6 +103,12 @@ enum ContainerStore {
         let detail = lookupError.map(String.init) ?? "unavailable"
         log("patch: MHA-C2 could not resolve \(bundleID), detail=\(detail)")
 
+        // Check BookmarkManager for direct or parent mounts
+        if let mountedPath = resolveAppContainerPathFromBookmarks(bundleID: bundleID) {
+            log("patch: bookmark mount resolved \(bundleID) -> \(mountedPath)")
+            return mountedPath
+        }
+
         // Fallback for iOS builds where MCM refuses to hand out sandbox
         // tokens (e.g. iOS 18.1.x): scan the app-data root with the inode
         // walk and read each container's MCM metadata plist directly. The
@@ -110,6 +116,77 @@ enum ContainerStore {
         if let scanned = resolveAppContainerPathByMetadataScan(bundleID: bundleID) {
             log("patch: filesystem metadata scan resolved \(bundleID)")
             return scanned
+        }
+        return nil
+    }
+
+    static func resolveAppContainerPathFromBookmarks(bundleID: String) -> String? {
+        let fm = FileManager.default
+        let mounted = BookmarkManager.shared.mountedFolders
+
+        for folder in mounted {
+            let path = folder.path
+            let match = BookmarkManager.shared.withSecurityScope(for: path) { scopedURL -> String? in
+                let targetPath = scopedURL.path
+
+                // 1. Check if the mounted folder itself is the container
+                if let meta = readContainerMetadata(containerPath: targetPath), meta.bundleID == bundleID {
+                    return path
+                }
+
+                // Special match for PosterBoard
+                if bundleID == "com.apple.PosterBoard" {
+                    let pbStore = (targetPath as NSString).appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore")
+                    let pbAlt = (targetPath as NSString).appendingPathComponent("Library/Application Support/PRBPosterDescriptorStore")
+                    if fm.fileExists(atPath: pbStore) || fm.fileExists(atPath: pbAlt) {
+                        return path
+                    }
+                    if targetPath.lowercased().contains("posterboard") || folder.name.lowercased().contains("posterboard") {
+                        return path
+                    }
+                }
+
+                // Special match for Phone / Dialer
+                if bundleID == "com.apple.mobilephone" || bundleID == "com.apple.InCallService" || bundleID == "com.apple.TelephonyUI" {
+                    if targetPath.lowercased().contains("mobilephone") || folder.name.lowercased().contains("mobilephone") {
+                        return path
+                    }
+                }
+
+                // 2. Check if the mounted folder is a parent directory containing containers
+                if let subdirs = try? fm.contentsOfDirectory(atPath: targetPath) {
+                    for subdir in subdirs {
+                        if subdir.hasPrefix(".") { continue }
+                        let subPath = (targetPath as NSString).appendingPathComponent(subdir)
+                        var isDir: ObjCBool = false
+                        guard fm.fileExists(atPath: subPath, isDirectory: &isDir), isDir.boolValue else { continue }
+
+                        if let meta = readContainerMetadata(containerPath: subPath), meta.bundleID == bundleID {
+                            return (path as NSString).appendingPathComponent(subdir)
+                        }
+
+                        if bundleID == "com.apple.PosterBoard" {
+                            let pbStore = (subPath as NSString).appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore")
+                            let pbAlt = (subPath as NSString).appendingPathComponent("Library/Application Support/PRBPosterDescriptorStore")
+                            if fm.fileExists(atPath: pbStore) || fm.fileExists(atPath: pbAlt) || subdir.lowercased().contains("posterboard") {
+                                return (path as NSString).appendingPathComponent(subdir)
+                            }
+                        }
+
+                        if bundleID == "com.apple.mobilephone" || bundleID == "com.apple.InCallService" || bundleID == "com.apple.TelephonyUI" {
+                            if subdir.lowercased().contains("mobilephone") {
+                                return (path as NSString).appendingPathComponent(subdir)
+                            }
+                        }
+                    }
+                }
+
+                return nil
+            }
+
+            if let resolved = match {
+                return resolved
+            }
         }
         return nil
     }
@@ -436,8 +513,19 @@ enum ContainerStore {
     static func isApplicationContainerPath(_ path: String) -> Bool {
         let canonicalRoot = ContainerDiscoveryMerger.canonicalPath(appDataRoot)
         let canonicalPath = ContainerDiscoveryMerger.canonicalPath(path)
-        guard canonicalPath.hasPrefix(canonicalRoot + "/") else { return false }
-        return UUID(uuidString: (canonicalPath as NSString).lastPathComponent) != nil
+        if canonicalPath.hasPrefix(canonicalRoot + "/") && UUID(uuidString: (canonicalPath as NSString).lastPathComponent) != nil {
+            return true
+        }
+        if BookmarkManager.shared.isUnderActiveScope(path: canonicalPath) || BookmarkManager.shared.isUnderActiveScope(path: path) {
+            return true
+        }
+        for folder in BookmarkManager.shared.mountedFolders {
+            let folderPath = ContainerDiscoveryMerger.canonicalPath(folder.path)
+            if canonicalPath == folderPath || canonicalPath.hasPrefix(folderPath + "/") || folderPath.hasPrefix(canonicalPath + "/") {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: Filesystem discovery

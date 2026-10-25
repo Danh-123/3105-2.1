@@ -14,6 +14,8 @@ struct WallpaperLabView: View {
     @State private var isBusy = false
     @State private var operationKey = "wallpaper.checking"
     @State private var showImporter = false
+    @State private var showMountSheet = false
+    @State private var pendingPackageToInstall: WallpaperStagedPackage?
     @State private var alert: WallpaperLabAlert?
     @State private var hasLoaded = false
     @State private var showSimulatedPackageDetail = false
@@ -55,6 +57,15 @@ struct WallpaperLabView: View {
                     onCancel: { showImporter = false }
                 )
                 .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showMountSheet) {
+                FolderMountSheet { _ in
+                    checkAccess()
+                    if let pending = pendingPackageToInstall {
+                        pendingPackageToInstall = nil
+                        install(pending)
+                    }
+                }
             }
             .navigationDestination(isPresented: $showSimulatedPackageDetail) {
                 if let package = packages.first {
@@ -117,6 +128,12 @@ struct WallpaperLabView: View {
                 Label(accessError, systemImage: "xmark.shield.fill")
                     .foregroundStyle(.red)
                 Button(language.text("wallpaper.try_again")) { checkAccess() }
+                Button {
+                    showMountSheet = true
+                } label: {
+                    Label(language.text("wallpaper.mount_posterboard"), systemImage: "folder.badge.plus")
+                        .foregroundStyle(AppTheme.accent)
+                }
             } else {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -152,6 +169,13 @@ struct WallpaperLabView: View {
                             canInstall: report?.canInstall == true && !isBusy,
                             onApply: {
                                 alert = WallpaperLabAlert(kind: .install(package))
+                            },
+                            onMount: {
+                                pendingPackageToInstall = package
+                                showMountSheet = true
+                            },
+                            onExport: {
+                                exportDescriptor(package)
                             }
                         )
                     } label: {
@@ -254,6 +278,26 @@ struct WallpaperLabView: View {
                 message: Text(message),
                 dismissButton: .default(Text(language.text("common.ok")))
             )
+        case .accessDenied(let message, let package):
+            return Alert(
+                title: Text(language.text("wallpaper.operation_failed")),
+                message: Text(message),
+                primaryButton: .default(Text(language.text("wallpaper.mount_posterboard"))) {
+                    pendingPackageToInstall = package
+                    showMountSheet = true
+                },
+                secondaryButton: .default(Text(language.text("wallpaper.export_workspace"))) {
+                    if let package {
+                        exportDescriptor(package)
+                    }
+                }
+            )
+        case .exportSuccess(let name):
+            return Alert(
+                title: Text(language.text("wallpaper.export_success_title")),
+                message: Text(language.text("wallpaper.export_success_message", name)),
+                dismissButton: .default(Text(language.text("common.ok")))
+            )
         }
     }
 
@@ -326,28 +370,7 @@ struct WallpaperLabView: View {
         operationKey = "wallpaper.installing"
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { () throws -> (WallpaperInstallReceipt, WallpaperAccessReport) in
-                let requiredExtensions = Set(
-                    package.payload.descriptors.map(\.extensionIdentifier)
-                )
-                let currentReport = try deviceAccessReport(
-                    requiredExtensionIdentifiers: requiredExtensions
-                )
-                guard currentReport.canInstall else { throw WallpaperLabError.accessDenied }
-                let backupRoot = try WallpaperPackageStore.backupRoot()
-                let receipt = try WallpaperInstaller.install(
-                    payload: package.payload,
-                    layout: currentReport.layout,
-                    backupRoot: backupRoot
-                )
-                do {
-                    try WallpaperPackageStore.delete(package)
-                } catch {
-                    log("wallpaper: staged package leftover after apply")
-                }
-                let refreshedReport = try deviceAccessReport(
-                    requiredExtensionIdentifiers: requiredExtensions
-                )
-                return (receipt, refreshedReport)
+                try WallpaperDeviceAccessService.install(package)
             }
             DispatchQueue.main.async {
                 isBusy = false
@@ -369,45 +392,41 @@ struct WallpaperLabView: View {
                     )
                 case .failure(let error):
                     log("wallpaper: install failed \(error.localizedDescription)")
-                    alert = WallpaperLabAlert(
-                        kind: .message(
-                            titleKey: "wallpaper.operation_failed",
-                            message: message(for: error)
+                    if let wallpaperError = error as? WallpaperLabError, wallpaperError == .accessDenied {
+                        alert = WallpaperLabAlert(
+                            kind: .accessDenied(message: message(for: error), package: package)
                         )
-                    )
+                    } else {
+                        alert = WallpaperLabAlert(
+                            kind: .message(
+                                titleKey: "wallpaper.operation_failed",
+                                message: message(for: error)
+                            )
+                        )
+                    }
                 }
             }
+        }
+    }
+
+    private func exportDescriptor(_ package: WallpaperStagedPackage) {
+        do {
+            _ = try WallpaperPackageStore.exportToWorkspace(package)
+            alert = WallpaperLabAlert(kind: .exportSuccess(package.displayName))
+        } catch {
+            alert = WallpaperLabAlert(
+                kind: .message(
+                    titleKey: "wallpaper.operation_failed",
+                    message: message(for: error)
+                )
+            )
         }
     }
 
     private func deviceAccessReport(
         requiredExtensionIdentifiers: Set<String>? = nil
     ) throws -> WallpaperAccessReport {
-#if targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--simulate-wallpaper-data") {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "3105-Simulated-PosterBoard",
-                isDirectory: true
-            )
-            let descriptors = root.appendingPathComponent(
-                "Library/Application Support/PRBPosterExtensionDataStore/72/Extensions/" +
-                    "com.apple.WallpaperKit.CollectionsPoster/descriptors",
-                isDirectory: true
-            )
-            try FileManager.default.createDirectory(at: descriptors, withIntermediateDirectories: true)
-            return try WallpaperAccessProbe.probe(
-                containerURL: root,
-                rootValidator: { $0.standardizedFileURL == root.standardizedFileURL },
-                requiredExtensionIdentifiers: requiredExtensionIdentifiers
-            )
-        }
-#endif
-        guard let path = ContainerStore.resolveAppContainerPath(
-            bundleID: "com.apple.PosterBoard"
-        ) else { throw WallpaperLabError.accessDenied }
-        return try WallpaperAccessProbe.probe(
-            containerURL: URL(fileURLWithPath: path, isDirectory: true),
-            rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
+        try WallpaperDeviceAccessService.report(
             requiredExtensionIdentifiers: requiredExtensionIdentifiers
         )
     }
@@ -429,6 +448,8 @@ private struct WallpaperPackageDetailView: View {
     let package: WallpaperStagedPackage
     let canInstall: Bool
     let onApply: () -> Void
+    var onMount: (() -> Void)? = nil
+    var onExport: (() -> Void)? = nil
 
     var body: some View {
         List {
@@ -479,6 +500,34 @@ private struct WallpaperPackageDetailView: View {
                 }
             }
 
+            if !canInstall {
+                Section {
+                    if let onMount {
+                        Button(action: onMount) {
+                            Label(language.text("wallpaper.mount_posterboard"), systemImage: "folder.badge.plus")
+                                .foregroundStyle(AppTheme.accent)
+                        }
+                    }
+                    if let onExport {
+                        Button(action: onExport) {
+                            Label(language.text("wallpaper.export_workspace"), systemImage: "square.and.arrow.up")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                } header: {
+                    Text(language.text("wallpaper.access_required"))
+                } footer: {
+                    Text(language.text("wallpaper.access_footer_hint"))
+                }
+            } else if let onExport {
+                Section {
+                    Button(action: onExport) {
+                        Label(language.text("wallpaper.export_workspace"), systemImage: "square.and.arrow.up")
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+
             Section {
                 Button(action: onApply) {
                     Text(language.text("wallpaper.install"))
@@ -508,6 +557,7 @@ struct InstalledWallpaperPackageDetailView: View {
     @State private var isBusy = true
     @State private var operationKey = "wallpaper.checking"
     @State private var alert: InstalledWallpaperAlert?
+    @State private var showMountSheet = false
 
     let package: WallpaperStagedPackage
     let onApplied: () -> Void
@@ -518,10 +568,22 @@ struct InstalledWallpaperPackageDetailView: View {
             canInstall: report?.canInstall == true && !isBusy,
             onApply: {
                 alert = InstalledWallpaperAlert(kind: .confirmInstall)
+            },
+            onMount: {
+                showMountSheet = true
+            },
+            onExport: {
+                exportDescriptor()
             }
         )
         .overlay { busyOverlay }
         .alert(item: $alert, content: alertContent)
+        .sheet(isPresented: $showMountSheet) {
+            FolderMountSheet { _ in
+                checkAccess()
+                install()
+            }
+        }
         .onAppear(perform: checkAccess)
     }
 
@@ -581,6 +643,23 @@ struct InstalledWallpaperPackageDetailView: View {
                 message: Text(message),
                 dismissButton: .default(Text(language.text("common.ok")))
             )
+        case .accessDenied(let message):
+            return Alert(
+                title: Text(language.text("wallpaper.operation_failed")),
+                message: Text(message),
+                primaryButton: .default(Text(language.text("wallpaper.mount_posterboard"))) {
+                    showMountSheet = true
+                },
+                secondaryButton: .default(Text(language.text("wallpaper.export_workspace"))) {
+                    exportDescriptor()
+                }
+            )
+        case .exportSuccess(let name):
+            return Alert(
+                title: Text(language.text("wallpaper.export_success_title")),
+                message: Text(language.text("wallpaper.export_success_message", name)),
+                dismissButton: .default(Text(language.text("common.ok")))
+            )
         }
     }
 
@@ -603,9 +682,15 @@ struct InstalledWallpaperPackageDetailView: View {
                     report = newReport
                 case .failure(let error):
                     report = nil
-                    alert = InstalledWallpaperAlert(
-                        kind: .failure(message(for: error))
-                    )
+                    if let wallpaperError = error as? WallpaperLabError, wallpaperError == .accessDenied {
+                        alert = InstalledWallpaperAlert(
+                            kind: .accessDenied(message(for: error))
+                        )
+                    } else {
+                        alert = InstalledWallpaperAlert(
+                            kind: .failure(message(for: error))
+                        )
+                    }
                 }
             }
         }
@@ -633,11 +718,26 @@ struct InstalledWallpaperPackageDetailView: View {
                     alert = InstalledWallpaperAlert(kind: .success(opened))
                 case .failure(let error):
                     log("wallpaper: install failed \(error.localizedDescription)")
-                    alert = InstalledWallpaperAlert(
-                        kind: .failure(message(for: error))
-                    )
+                    if let wallpaperError = error as? WallpaperLabError, wallpaperError == .accessDenied {
+                        alert = InstalledWallpaperAlert(
+                            kind: .accessDenied(message(for: error))
+                        )
+                    } else {
+                        alert = InstalledWallpaperAlert(
+                            kind: .failure(message(for: error))
+                        )
+                    }
                 }
             }
+        }
+    }
+
+    private func exportDescriptor() {
+        do {
+            _ = try WallpaperPackageStore.exportToWorkspace(package)
+            alert = InstalledWallpaperAlert(kind: .exportSuccess(package.displayName))
+        } catch {
+            alert = InstalledWallpaperAlert(kind: .failure(message(for: error)))
         }
     }
 
@@ -657,6 +757,8 @@ private struct InstalledWallpaperAlert: Identifiable {
         case confirmInstall
         case success(Bool)
         case failure(String)
+        case accessDenied(String)
+        case exportSuccess(String)
     }
 }
 
@@ -871,5 +973,7 @@ private struct WallpaperLabAlert: Identifiable {
     enum Kind {
         case install(WallpaperStagedPackage)
         case message(titleKey: String, message: String)
+        case accessDenied(message: String, package: WallpaperStagedPackage?)
+        case exportSuccess(String)
     }
 }

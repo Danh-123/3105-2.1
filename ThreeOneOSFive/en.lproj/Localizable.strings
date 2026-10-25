@@ -649,6 +649,12 @@
 "wallpaper.error.install" = "Installation failed and any descriptors added during this attempt were rolled back.";
 "wallpaper.error.restore" = "3105 could not safely remove every descriptor from this installation.";
 "wallpaper.error.unknown" = "An unexpected error occurred. Review Session Logs for details.";
+"wallpaper.mount_posterboard" = "Grant Folder Permission (Mount PosterBoard)";
+"wallpaper.export_workspace" = "Export Wallpaper Files to Workspace (Export Descriptor)";
+"wallpaper.export_success_title" = "Descriptor Exported Successfully";
+"wallpaper.export_success_message" = "Wallpaper package exported to Workspace/ExportedWallpapers/%@ with standard format 99990000-0000-0000-0000-000000000000. Open the Files app to view.";
+"wallpaper.access_required" = "Permission Required";
+"wallpaper.access_footer_hint" = "If the sandbox blocks PosterBoard, mount the PosterBoard folder or export descriptors to Workspace.";
 "repository.for_you" = "For You";
 "repository.new" = "New";
 "repository.new_empty_title" = "No New Packages";

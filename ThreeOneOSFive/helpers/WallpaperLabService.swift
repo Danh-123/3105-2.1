@@ -63,14 +63,18 @@ enum WallpaperAccessProbe {
                 ".3105-wallpaper-probe-\(UUID().uuidString)",
                 isDirectory: true
             )
-            let created = mkdir(probeURL.path, 0o700) == 0
+            var created = mkdir(probeURL.path, 0o700) == 0
+            if !created {
+                created = (try? fileManager.createDirectory(at: probeURL, withIntermediateDirectories: false)) != nil
+            }
             if created {
                 let descriptor = open(
                     probeURL.path,
                     O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
                 )
                 if descriptor >= 0 { close(descriptor) }
-                if rmdir(probeURL.path) != 0 || descriptor < 0 {
+                let removed = rmdir(probeURL.path) == 0 || (try? fileManager.removeItem(at: probeURL)) != nil
+                if !removed {
                     deniedIdentifiers.append(identifier)
                     try? fileManager.removeItem(at: probeURL)
                 }
@@ -121,11 +125,13 @@ enum WallpaperDeviceAccessService {
         ) else {
             throw WallpaperLabError.accessDenied
         }
-        return try WallpaperAccessProbe.probe(
-            containerURL: URL(fileURLWithPath: path, isDirectory: true),
-            rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
-            requiredExtensionIdentifiers: requiredExtensionIdentifiers
-        )
+        return try BookmarkManager.shared.withSecurityScope(for: path) { scopedURL in
+            try WallpaperAccessProbe.probe(
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
+                requiredExtensionIdentifiers: requiredExtensionIdentifiers
+            )
+        }
     }
 
     static func install(
@@ -134,48 +140,67 @@ enum WallpaperDeviceAccessService {
         let requiredExtensions = Set(
             package.payload.descriptors.map(\.extensionIdentifier)
         )
-        let currentReport = try report(
-            requiredExtensionIdentifiers: requiredExtensions
-        )
-        guard currentReport.canInstall else {
-            throw WallpaperLabError.accessDenied
-        }
-        let backupRoot = try WallpaperPackageStore.backupRoot()
-        let receipt = try WallpaperInstaller.install(
-            payload: package.payload,
-            layout: currentReport.layout,
-            backupRoot: backupRoot
-        )
-        do {
-            try WallpaperPackageStore.delete(package)
-        } catch {
-            log("wallpaper: staged package leftover after apply")
-        }
-        return (
-            receipt,
-            try report(requiredExtensionIdentifiers: requiredExtensions)
-        )
-    }
-
-    static func resetCustomCollections() throws -> (Int, WallpaperAccessReport) {
-        let currentReport = try report()
-        guard currentReport.canInstall else {
-            throw WallpaperLabError.accessDenied
-        }
         guard let path = ContainerStore.resolveAppContainerPath(
             bundleID: "com.apple.PosterBoard"
         ) else {
             throw WallpaperLabError.accessDenied
         }
-        let containerURL = URL(fileURLWithPath: path, isDirectory: true)
-        let backupRoot = try WallpaperPackageStore.backupRoot()
-        let removed = try WallpaperInstaller.resetCustomDescriptors(
-            layout: currentReport.layout,
-            containerURL: containerURL,
-            rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
-            backupRoot: backupRoot
-        )
-        return (removed, try report())
+        return try BookmarkManager.shared.withSecurityScope(for: path) { scopedURL in
+            let currentReport = try WallpaperAccessProbe.probe(
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
+                requiredExtensionIdentifiers: requiredExtensions
+            )
+            guard currentReport.canInstall else {
+                throw WallpaperLabError.accessDenied
+            }
+            let backupRoot = try WallpaperPackageStore.backupRoot()
+            let receipt = try WallpaperInstaller.install(
+                payload: package.payload,
+                layout: currentReport.layout,
+                backupRoot: backupRoot
+            )
+            do {
+                try WallpaperPackageStore.delete(package)
+            } catch {
+                log("wallpaper: staged package leftover after apply")
+            }
+            let refreshedReport = try WallpaperAccessProbe.probe(
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
+                requiredExtensionIdentifiers: requiredExtensions
+            )
+            return (receipt, refreshedReport)
+        }
+    }
+
+    static func resetCustomCollections() throws -> (Int, WallpaperAccessReport) {
+        guard let path = ContainerStore.resolveAppContainerPath(
+            bundleID: "com.apple.PosterBoard"
+        ) else {
+            throw WallpaperLabError.accessDenied
+        }
+        return try BookmarkManager.shared.withSecurityScope(for: path) { scopedURL in
+            let currentReport = try WallpaperAccessProbe.probe(
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) }
+            )
+            guard currentReport.canInstall else {
+                throw WallpaperLabError.accessDenied
+            }
+            let backupRoot = try WallpaperPackageStore.backupRoot()
+            let removed = try WallpaperInstaller.resetCustomDescriptors(
+                layout: currentReport.layout,
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },
+                backupRoot: backupRoot
+            )
+            let refreshedReport = try WallpaperAccessProbe.probe(
+                containerURL: scopedURL,
+                rootValidator: { ContainerStore.isApplicationContainerPath($0.path) }
+            )
+            return (removed, refreshedReport)
+        }
     }
 }
 
@@ -207,6 +232,56 @@ enum WallpaperPackageStore {
         let url = base.appendingPathComponent("WallpaperLab/Backups", isDirectory: true)
         try createApprovedDirectory(url, fileManager: fileManager)
         return url
+    }
+
+    static func exportToWorkspace(
+        _ package: WallpaperStagedPackage,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let documents = try fileManager.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let sanitizedName = package.displayName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let exportDir = documents
+            .appendingPathComponent("Workspace", isDirectory: true)
+            .appendingPathComponent("ExportedWallpapers", isDirectory: true)
+            .appendingPathComponent(sanitizedName.isEmpty ? "Wallpaper" : sanitizedName, isDirectory: true)
+
+        try fileManager.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+        let normalizedUUID = "99990000-0000-0000-0000-000000000000"
+        let normalizedTarget = exportDir.appendingPathComponent(normalizedUUID, isDirectory: true)
+
+        if fileManager.fileExists(atPath: normalizedTarget.path) {
+            try? fileManager.removeItem(at: normalizedTarget)
+        }
+
+        if let firstDescriptor = package.payload.descriptors.first {
+            try fileManager.copyItem(at: firstDescriptor.directoryURL, to: normalizedTarget)
+            try? WallpaperDescriptorRewriter.randomize(
+                in: normalizedTarget,
+                identifier: 999900,
+                fileManager: fileManager
+            )
+        } else if fileManager.fileExists(atPath: package.extractedURL.path) {
+            try fileManager.copyItem(at: package.extractedURL, to: normalizedTarget)
+        }
+
+        for descriptor in package.payload.descriptors {
+            let descName = descriptor.directoryURL.lastPathComponent
+            let dest = exportDir.appendingPathComponent(descName, isDirectory: true)
+            if !fileManager.fileExists(atPath: dest.path) {
+                try? fileManager.copyItem(at: descriptor.directoryURL, to: dest)
+            }
+        }
+
+        return exportDir
     }
 
     static func importPackage(

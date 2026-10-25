@@ -134,8 +134,15 @@ enum WallpaperInstaller {
                     identifier: orderedIdentifiers[source.id],
                     fileManager: fileManager
                 )
-                guard rename(stagingURL.path, finalURL.path) == 0 else {
-                    throw WallpaperLabError.installFailed
+                if rename(stagingURL.path, finalURL.path) != 0 {
+                    do {
+                        if fileManager.fileExists(atPath: finalURL.path) {
+                            try? fileManager.removeItem(at: finalURL)
+                        }
+                        try fileManager.moveItem(at: stagingURL, to: finalURL)
+                    } catch {
+                        throw WallpaperLabError.installFailed
+                    }
                 }
                 try synchronizeDirectory(destinationDirectory)
             }
@@ -462,9 +469,14 @@ enum WallpaperInstaller {
 
     private static func synchronizeDirectory(_ url: URL) throws {
         let descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw WallpaperLabError.installFailed }
+        guard descriptor >= 0 else {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return // Tolerant for security-scoped mounts where direct directory descriptor open is restricted
+            }
+            throw WallpaperLabError.installFailed
+        }
         defer { close(descriptor) }
-        guard fsync(descriptor) == 0 || errno == EINVAL else {
+        guard fsync(descriptor) == 0 || errno == EINVAL || errno == ENOTSUP || errno == EPERM else {
             throw WallpaperLabError.installFailed
         }
     }

@@ -100,19 +100,33 @@ enum WallpaperLayoutScanner {
         }
         try validateDirectory(containerURL, fileManager: fileManager)
 
-        let storeURL = containerURL.appendingPathComponent(
+        var storeURL = containerURL.appendingPathComponent(
             storeRelativePath,
             isDirectory: true
         )
-        guard isContained(storeURL, in: containerURL),
+        if !fileManager.fileExists(atPath: storeURL.path) {
+            let altStoreURL = containerURL.appendingPathComponent(
+                "Library/Application Support/PRBPosterDescriptorStore",
+                isDirectory: true
+            )
+            if fileManager.fileExists(atPath: altStoreURL.path) {
+                storeURL = altStoreURL
+            } else if containerURL.lastPathComponent.contains("PRBPoster") || containerURL.lastPathComponent == "Extensions" {
+                storeURL = containerURL
+            }
+        }
+        guard isContained(storeURL, in: containerURL) || storeURL == containerURL,
               fileManager.fileExists(atPath: storeURL.path) else {
             throw WallpaperLabError.posterStoreUnavailable
         }
-        try validatePathComponents(
-            relativePath: storeRelativePath,
-            root: containerURL,
-            fileManager: fileManager
-        )
+        if storeURL != containerURL {
+            let rel = storeURL.path.replacingOccurrences(of: containerURL.path + "/", with: "")
+            try? validatePathComponents(
+                relativePath: rel,
+                root: containerURL,
+                fileManager: fileManager
+            )
+        }
 
         let generationURLs = try fileManager.contentsOfDirectory(
             at: storeURL,

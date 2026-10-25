@@ -649,6 +649,12 @@
 "wallpaper.error.install" = "Cài đặt thất bại và mọi descriptor đã thêm trong lần thử này đã được rollback.";
 "wallpaper.error.restore" = "3105 không thể xóa an toàn toàn bộ descriptor của lần cài này.";
 "wallpaper.error.unknown" = "Đã xảy ra lỗi không mong muốn. Hãy kiểm tra Nhật ký phiên để biết chi tiết.";
+"wallpaper.mount_posterboard" = "Cấp quyền thư mục (Mount PosterBoard)";
+"wallpaper.export_workspace" = "Xuất tệp hình nền ra Workspace (Export Descriptor)";
+"wallpaper.export_success_title" = "Xuất descriptor thành công";
+"wallpaper.export_success_message" = "Đã xuất gói hình nền vào Workspace/ExportedWallpapers/%@ với định dạng 99990000-0000-0000-0000-000000000000. Bạn có thể mở ứng dụng Tệp (Files) để xem.";
+"wallpaper.access_required" = "Yêu cầu quyền truy cập";
+"wallpaper.access_footer_hint" = "Nếu sandbox chặn PosterBoard, hãy Mount thư mục PosterBoard hoặc Xuất descriptor ra Workspace để áp dụng.";
 "repository.for_you" = "Dành cho bạn";
 "repository.new" = "Mới nhất";
 "repository.new_empty_title" = "Chưa có patch mới";

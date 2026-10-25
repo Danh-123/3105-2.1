@@ -92,6 +92,15 @@ enum DevicePatchService {
             }
             roots[bundleID] = PatchPathValidator.canonicalFileURL(URL(fileURLWithPath: path, isDirectory: true))
         }
-        return try operation(roots)
+
+        func executeWithScopes(remaining: [URL], block: () throws -> T) throws -> T {
+            guard let next = remaining.first else { return try block() }
+            return try BookmarkManager.shared.withSecurityScope(for: next.path) { _ in
+                try executeWithScopes(remaining: Array(remaining.dropFirst()), block: block)
+            }
+        }
+        return try executeWithScopes(remaining: Array(roots.values)) {
+            try operation(roots)
+        }
     }
 }

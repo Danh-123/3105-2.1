@@ -8,6 +8,7 @@ struct FolderMountSheet: View {
     @State private var isShowingPicker = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    var onFolderMounted: ((URL) -> Void)? = nil
 
     var body: some View {
         NavigationStack {
@@ -163,6 +164,10 @@ struct FolderMountSheet: View {
             guard let url = urls.first else { return }
             do {
                 _ = try bookmarkManager.saveBookmark(for: url)
+                onFolderMounted?(url)
+                if onFolderMounted != nil {
+                    dismiss()
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 isShowingError = true

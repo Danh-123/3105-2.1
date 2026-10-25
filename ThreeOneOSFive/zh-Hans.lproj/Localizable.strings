@@ -649,6 +649,12 @@
 "wallpaper.error.install" = "安装失败，本次尝试添加的描述符已回滚。";
 "wallpaper.error.restore" = "3105 无法安全移除此安装中的全部描述符。";
 "wallpaper.error.unknown" = "发生意外错误。请查看会话日志了解详情。";
+"wallpaper.mount_posterboard" = "授予文件夹权限 (挂载 PosterBoard)";
+"wallpaper.export_workspace" = "导出壁纸文件到工作区 (导出描述符)";
+"wallpaper.export_success_title" = "描述符导出成功";
+"wallpaper.export_success_message" = "壁纸包已导出至 Workspace/ExportedWallpapers/%@，格式为 99990000-0000-0000-0000-000000000000。您可以在“文件”中查看。";
+"wallpaper.access_required" = "需要访问权限";
+"wallpaper.access_footer_hint" = "如果沙盒阻止访问 PosterBoard，请挂载 PosterBoard 文件夹或将描述符导出到工作区。";
 "repository.for_you" = "为你推荐";
 "repository.new" = "最新";
 "repository.new_empty_title" = "暂无新软件包";
