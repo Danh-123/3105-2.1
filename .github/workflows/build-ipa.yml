@@ -66,14 +66,32 @@ jobs:
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           APP_NAME=$(basename "$APP_PATH" .app)
+
+          # Strip extended attributes and quarantine flags that cause codesign failures
+          xattr -cr build/Payload || true
+
+          # Ensure full directory and executable permissions (+x) on application binary
+          chmod -R 755 build/Payload
+          if [ -f "build/Payload/$APP_NAME.app/$APP_NAME" ]; then
+            chmod +x "build/Payload/$APP_NAME.app/$APP_NAME"
+          fi
+          find "build/Payload/$APP_NAME.app" -type f -perm +111 -exec chmod 755 {} + 2>/dev/null || true
+
+          # Package cleanly with zip preserving symlinks and excluding macOS metadata (__MACOSX / .DS_Store)
           cd build
-          ditto -c -k --sequesterRsrc --keepParent Payload "unsigned-$APP_NAME.ipa"
+          rm -f "unsigned-$APP_NAME.ipa"
+          zip -qry "unsigned-$APP_NAME.ipa" Payload -x "*.DS_Store" -x "__MACOSX*"
           echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"
 
       - name: Verify IPA
         run: |
           ls -lh "build/unsigned-$APP_NAME.ipa"
           unzip -l "build/unsigned-$APP_NAME.ipa" | head -30
+          if unzip -l "build/unsigned-$APP_NAME.ipa" | grep -i "__MACOSX"; then
+            echo "ERROR: __MACOSX resource forks detected in IPA!"
+            exit 1
+          fi
+          echo "IPA packaging verified: Clean archive with correct binary permissions."
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
