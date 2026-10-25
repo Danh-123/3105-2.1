@@ -679,6 +679,8 @@
 "mount.system_capability" = "System Capabilities";
 "mount.capability_footer" = "On iOS 27 and sandboxed environments, security-scoped folder bookmarks allow 3105 to safely read and write files without requiring kernel privileges.";
 "mount.actions" = "Actions";
+"mount.quick_workspace" = "Quick Mount 3105 Workspace";
+"mount.quick_workspace_footer" = "Directly mount 3105 internal Workspace with 1 tap. Enables installing and exporting PosterBoard wallpapers even when iOS 27 restricts direct container browsing.";
 "mount.add_folder" = "Select Folder to Mount…";
 "mount.refresh" = "Reactivate All Permissions";
 "mount.mounted_folders" = "Mounted Folders (%lld)";

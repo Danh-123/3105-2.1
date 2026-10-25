@@ -88,11 +88,18 @@ enum WallpaperInstaller {
         }
 
         do {
-            for source in payload.descriptors {
-                guard let destinationDirectory = layout.extensionDescriptorDirectories[
-                    source.extensionIdentifier
-                ] else {
-                    throw WallpaperLabError.unsupportedPosterLayout
+            for (index, source) in payload.descriptors.enumerated() {
+                let destinationDirectory: URL
+                if let existing = layout.extensionDescriptorDirectories[source.extensionIdentifier] {
+                    destinationDirectory = existing
+                } else {
+                    let fallbackDest = layout.storeURL
+                        .appendingPathComponent(layout.generation, isDirectory: true)
+                        .appendingPathComponent("Extensions", isDirectory: true)
+                        .appendingPathComponent(source.extensionIdentifier, isDirectory: true)
+                        .appendingPathComponent("descriptors", isDirectory: true)
+                    try fileManager.createDirectory(at: fallbackDest, withIntermediateDirectories: true)
+                    destinationDirectory = fallbackDest
                 }
                 try validateDescriptorTree(
                     source.directoryURL,
@@ -101,9 +108,21 @@ enum WallpaperInstaller {
                     fileManager: fileManager
                 )
 
-                let directoryName = UUID().uuidString.uppercased()
-                guard !(originalNames[source.extensionIdentifier] ?? []).contains(directoryName) else {
-                    throw WallpaperLabError.installFailed
+                let directoryName: String
+                let normalizedDescriptorName = "99990000-0000-0000-0000-000000000000"
+                if destinationDirectory.path.contains("PosterBoard_Workspace") || SystemCapabilityDetector.isIOS27OrLater {
+                    directoryName = (index == 0) ? normalizedDescriptorName : UUID().uuidString.uppercased()
+                } else {
+                    directoryName = UUID().uuidString.uppercased()
+                }
+
+                if let existingNames = originalNames[source.extensionIdentifier], existingNames.contains(directoryName) {
+                    if directoryName == normalizedDescriptorName {
+                        let existingTarget = destinationDirectory.appendingPathComponent(directoryName)
+                        try? fileManager.removeItem(at: existingTarget)
+                    } else {
+                        throw WallpaperLabError.installFailed
+                    }
                 }
                 let installedDescriptor = WallpaperInstalledDescriptor(
                     extensionIdentifier: source.extensionIdentifier,
@@ -620,5 +639,63 @@ enum WallpaperDescriptorRewriter {
         } catch {
             throw WallpaperLabError.unsupportedPackage
         }
+    }
+
+    @discardableResult
+    static func prepareIOS27WorkspaceFallbackContainerIfNeeded() throws -> URL {
+        let docs = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let pbWorkspace = docs.appendingPathComponent("PosterBoard_Workspace/com.apple.PosterBoard", isDirectory: true)
+        let extensions = [
+            "com.apple.WallpaperKit.CollectionsPoster",
+            "com.apple.PhotosUIPrivate.PhotosPosterProvider",
+            "com.apple.MercuryPoster"
+        ]
+        for ext in extensions {
+            let storeURL = pbWorkspace
+                .appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore/72/Extensions/\(ext)/descriptors", isDirectory: true)
+            try FileManager.default.createDirectory(at: storeURL, withIntermediateDirectories: true)
+        }
+
+        let metadataPath = pbWorkspace.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+        if !FileManager.default.fileExists(atPath: metadataPath.path) {
+            let metadataPlist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>MCMMetadataIdentifier</key>
+                <string>com.apple.PosterBoard</string>
+                <key>MCMMetadataInfo</key>
+                <dict>
+                    <key>CFBundleDisplayName</key>
+                    <string>PosterBoard</string>
+                    <key>CFBundleName</key>
+                    <string>PosterBoard</string>
+                </dict>
+            </dict>
+            </plist>
+            """
+            try? metadataPlist.write(to: metadataPath, atomically: true, encoding: .utf8)
+        }
+
+        // Register in BookmarkManager if not already registered
+        let mounted = BookmarkManager.shared.mountedFolders
+        if !mounted.contains(where: { $0.path == pbWorkspace.path }) {
+            _ = try? BookmarkManager.shared.saveBookmark(for: pbWorkspace, customName: "PosterBoard (iOS 27 Workspace)")
+        }
+
+        // Also ensure Workspace folder exists and is mounted
+        let workspaceDir = docs.appendingPathComponent("Workspace", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workspaceDir, withIntermediateDirectories: true)
+        if !mounted.contains(where: { $0.path == workspaceDir.path }) {
+            _ = try? BookmarkManager.shared.saveBookmark(for: workspaceDir, customName: "3105 Workspace")
+        }
+
+        return pbWorkspace
     }
 }

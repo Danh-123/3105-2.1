@@ -78,6 +78,13 @@ struct FolderMountSheet: View {
     private var actionsSection: some View {
         Section {
             Button {
+                quickMountWorkspace()
+            } label: {
+                Label(language.text("mount.quick_workspace"), systemImage: "bolt.fill")
+                    .foregroundStyle(.orange)
+            }
+
+            Button {
                 isShowingPicker = true
             } label: {
                 Label(language.text("mount.add_folder"), systemImage: "folder.badge.plus")
@@ -91,6 +98,8 @@ struct FolderMountSheet: View {
             }
         } header: {
             Text(language.text("mount.actions"))
+        } footer: {
+            Text(language.text("mount.quick_workspace_footer"))
         }
     }
 
@@ -150,7 +159,7 @@ struct FolderMountSheet: View {
                 }
             }
         } header: {
-            Text(language.text("mount.mounted_folders"))
+            Text(String(format: language.text("mount.mounted_folders"), BookmarkManager.shared.mountedFolders.count))
         } footer: {
             if !bookmarkManager.mountedFolders.isEmpty {
                 Text(language.text("mount.mounted_footer"))
@@ -173,6 +182,31 @@ struct FolderMountSheet: View {
                 isShowingError = true
             }
         case .failure(let error):
+            errorMessage = error.localizedDescription
+            isShowingError = true
+        }
+    }
+
+    private func quickMountWorkspace() {
+        do {
+            let docs = try FileManager.default.url(
+                for: .documentDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            let workspace = docs.appendingPathComponent("Workspace", isDirectory: true)
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+            _ = try bookmarkManager.saveBookmark(for: workspace, customName: "3105 Workspace")
+
+            // Prepare PosterBoard iOS 27 workspace fallback
+            _ = try? WallpaperInstaller.prepareIOS27WorkspaceFallbackContainerIfNeeded()
+
+            onFolderMounted?(workspace)
+            if onFolderMounted != nil {
+                dismiss()
+            }
+        } catch {
             errorMessage = error.localizedDescription
             isShowingError = true
         }

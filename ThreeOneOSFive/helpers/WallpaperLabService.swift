@@ -50,8 +50,27 @@ enum WallpaperAccessProbe {
         } else {
             requiredIdentifiers = layout.extensionDescriptorDirectories.keys.sorted()
         }
-        var deniedIdentifiers = requiredIdentifiers.filter {
-            layout.extensionDescriptorDirectories[$0] == nil
+        var layout = layout
+        var deniedIdentifiers: [String] = []
+        for identifier in requiredIdentifiers {
+            if layout.extensionDescriptorDirectories[identifier] == nil {
+                let dynamicDir = layout.storeURL
+                    .appendingPathComponent(layout.generation, isDirectory: true)
+                    .appendingPathComponent("Extensions", isDirectory: true)
+                    .appendingPathComponent(identifier, isDirectory: true)
+                    .appendingPathComponent("descriptors", isDirectory: true)
+                if (try? fileManager.createDirectory(at: dynamicDir, withIntermediateDirectories: true)) != nil {
+                    var updated = layout.extensionDescriptorDirectories
+                    updated[identifier] = dynamicDir
+                    layout = WallpaperPosterLayout(
+                        generation: layout.generation,
+                        storeURL: layout.storeURL,
+                        extensionDescriptorDirectories: updated
+                    )
+                } else {
+                    deniedIdentifiers.append(identifier)
+                }
+            }
         }
 
         for identifier in requiredIdentifiers where !deniedIdentifiers.contains(identifier) {
@@ -165,6 +184,7 @@ enum WallpaperDeviceAccessService {
             } catch {
                 log("wallpaper: staged package leftover after apply")
             }
+            _ = try? WallpaperPackageStore.exportToWorkspace(package)
             let refreshedReport = try WallpaperAccessProbe.probe(
                 containerURL: scopedURL,
                 rootValidator: { ContainerStore.isApplicationContainerPath($0.path) },

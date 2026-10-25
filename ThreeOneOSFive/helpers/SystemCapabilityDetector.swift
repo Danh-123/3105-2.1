@@ -39,13 +39,15 @@ enum SystemCapabilityDetector {
         return ExploitSupportPolicy.supportsKernelExploit(major: v.major, minor: v.minor, patch: v.patch)
     }
 
-    /// True if MobileContainerManager traversal via bad_query is viable (iOS 26.0 - 26.6.1).
+    /// True if MobileContainerManager traversal via bad_query is viable or safe to attempt (iOS 26.0 - 26.6.1 and iOS 27).
     static var isMCMTraversalViable: Bool {
-        // On iOS 27+, path traversal in MCM is completely blocked by daemon checks
-        if isIOS27OrLater { return false }
         if isIOS26 {
             let v = osVersionTuple
             return v.minor < 6 || (v.minor == 6 && v.patch <= 1)
+        }
+        if isIOS27OrLater {
+            // On iOS 27+, mcm_bridge and bad_query dynamic library calls can be safely attempted without kernel crashes
+            return true
         }
         return false
     }
@@ -54,7 +56,7 @@ enum SystemCapabilityDetector {
     static var bestAccessCapability: SystemAccessCapability {
         if isKernelExploitSupported {
             return .kernelRW
-        } else if isMCMTraversalViable {
+        } else if isMCMTraversalViable && !isIOS27OrLater {
             return .mcmTraversal
         } else if isIOS27OrLater {
             return .securityScopedMount

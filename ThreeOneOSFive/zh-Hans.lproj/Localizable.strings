@@ -679,6 +679,8 @@
 "mount.system_capability" = "系统功能支持";
 "mount.capability_footer" = "在 iOS 27 及沙盒环境中，安全作用域文件夹书签（Security-Scoped Bookmark）可让 3105 安全读写文件，无需内核权限。";
 "mount.actions" = "操作";
+"mount.quick_workspace" = "快速挂载 3105 工作区";
+"mount.quick_workspace_footer" = "一键直接挂载 3105 内部工作区。即使在 iOS 27 限制直接系统目录访问时，也可以安装并导出 PosterBoard 壁纸。";
 "mount.add_folder" = "选择要挂载的文件夹…";
 "mount.refresh" = "重新激活所有权限";
 "mount.mounted_folders" = "已挂载文件夹 (%lld)";

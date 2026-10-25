@@ -679,6 +679,8 @@
 "mount.system_capability" = "Khả năng hệ thống";
 "mount.capability_footer" = "Trên iOS 27 và môi trường sandbox, việc cấp quyền theo thư mục (Security-Scoped Bookmark) cho phép 3105 đọc/ghi an toàn mà không cần khai thác kernel.";
 "mount.actions" = "Tác vụ";
+"mount.quick_workspace" = "Gắn kết nhanh Workspace 3105";
+"mount.quick_workspace_footer" = "Gắn kết trực tiếp thư mục Workspace nội bộ của 3105 chỉ với 1 chạm. Cho phép cài đặt và xuất hình nền PosterBoard ngay cả khi iOS 27 giới hạn quyền truy cập sâu.";
 "mount.add_folder" = "Chọn thư mục để gắn kết…";
 "mount.refresh" = "Kích hoạt lại toàn bộ quyền";
 "mount.mounted_folders" = "Thư mục đã gắn kết (%lld)";

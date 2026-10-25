@@ -97,9 +97,22 @@ enum ContainerStore {
         var lookupError: NSString?
         if let path = MCMActivateContainerPath(2, bundleID, false, &lookupError),
            isApplicationContainerPath(path) {
+            _ = grantContainerAccess(path)
             log("patch: MHA-C2 resolved \(bundleID)")
             return path
         }
+
+        // For Apple system containers (e.g. PosterBoard, lsd), try MCM system class 12 and 10
+        if bundleID.hasPrefix("com.apple.") {
+            var sysError: NSString?
+            if let path = MCMActivateContainerPath(12, bundleID, false, &sysError) ?? MCMActivateContainerPath(10, bundleID, false, &sysError),
+               isApplicationContainerPath(path) || FileManager.default.fileExists(atPath: path) {
+                _ = grantContainerAccess(path)
+                log("patch: MCM system resolved \(bundleID) -> \(path)")
+                return path
+            }
+        }
+
         let detail = lookupError.map(String.init) ?? "unavailable"
         log("patch: MHA-C2 could not resolve \(bundleID), detail=\(detail)")
 
@@ -109,7 +122,15 @@ enum ContainerStore {
             return mountedPath
         }
 
-        // Fallback for iOS builds where MCM refuses to hand out sandbox
+        // Fallback for PosterBoard on iOS 27 Workspace
+        if bundleID == "com.apple.PosterBoard" && SystemCapabilityDetector.isIOS27OrLater {
+            if let fallbackURL = try? WallpaperInstaller.prepareIOS27WorkspaceFallbackContainerIfNeeded() {
+                log("patch: iOS 27 workspace fallback resolved \(bundleID) -> \(fallbackURL.path)")
+                return fallbackURL.path
+            }
+        }
+
+        // Fallback for for iOS builds where MCM refuses to hand out sandbox
         // tokens (e.g. iOS 18.1.x): scan the app-data root with the inode
         // walk and read each container's MCM metadata plist directly. The
         // raw reads only succeed when the sandbox escape is active.
@@ -614,7 +635,18 @@ enum ContainerStore {
         guard shouldUseBadQuery else { return -1 }
         let clean = containerPath.hasSuffix("/") ? String(containerPath.dropLast()) : containerPath
         var pathC = clean.utf8CString.map { Int8($0) }
-        return bad_query(&pathC, true, nil, false)
+        let handle = bad_query(&pathC, true, nil, false)
+        if handle >= 0 {
+            return handle
+        }
+        // Try mcm_bridge / MCMActivateContainerPath for container if bad_query direct grant fails
+        if clean.contains("com.apple.PosterBoard") || clean.contains("PosterBoard") {
+            var err: NSString?
+            if MCMActivateContainerPath(2, "com.apple.PosterBoard", false, &err) != nil {
+                return 1
+            }
+        }
+        return handle
     }
 
     static func containersFromFilesystem() -> [InstalledApp] {
