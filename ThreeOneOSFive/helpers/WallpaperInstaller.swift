@@ -499,6 +499,72 @@ enum WallpaperInstaller {
             throw WallpaperLabError.installFailed
         }
     }
+
+    // MARK: - iOS 27 Workspace Fallback
+
+    @discardableResult
+    static func prepareIOS27WorkspaceFallbackContainerIfNeeded() throws -> URL {
+        let docs = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let pbWorkspace = docs.appendingPathComponent("PosterBoard_Workspace/com.apple.PosterBoard", isDirectory: true)
+
+        let descriptorStore = pbWorkspace.appendingPathComponent("Library/Application Support/PRBPosterDescriptorStore", isDirectory: true)
+        try FileManager.default.createDirectory(at: descriptorStore, withIntermediateDirectories: true)
+
+        let extensions = [
+            "com.apple.WallpaperKit.CollectionsPoster",
+            "com.apple.PhotosUIPrivate.PhotosPosterProvider",
+            "com.apple.MercuryPoster"
+        ]
+        for storeName in ["PRBPosterExtensionDataStore", "PRBPosterDescriptorStore"] {
+            for ext in extensions {
+                let storeURL = pbWorkspace
+                    .appendingPathComponent("Library/Application Support/\(storeName)/72/Extensions/\(ext)/descriptors", isDirectory: true)
+                try FileManager.default.createDirectory(at: storeURL, withIntermediateDirectories: true)
+            }
+        }
+
+        let metadataPath = pbWorkspace.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+        if !FileManager.default.fileExists(atPath: metadataPath.path) {
+            let metadataPlist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>MCMMetadataIdentifier</key>
+                <string>com.apple.PosterBoard</string>
+                <key>MCMMetadataInfo</key>
+                <dict>
+                    <key>CFBundleDisplayName</key>
+                    <string>PosterBoard</string>
+                    <key>CFBundleName</key>
+                    <string>PosterBoard</string>
+                </dict>
+            </dict>
+            </plist>
+            """
+            try? metadataPlist.write(to: metadataPath, atomically: true, encoding: .utf8)
+        }
+
+        // Register in BookmarkManager if not already registered
+        let mounted = BookmarkManager.shared.mountedFolders
+        if !mounted.contains(where: { $0.path == pbWorkspace.path }) {
+            _ = try? BookmarkManager.shared.saveBookmark(for: pbWorkspace, customName: "PosterBoard (iOS 27 Workspace)")
+        }
+
+        // Also ensure Workspace folder exists and is mounted
+        let workspaceDir = docs.appendingPathComponent("Workspace", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workspaceDir, withIntermediateDirectories: true)
+        if !mounted.contains(where: { $0.path == workspaceDir.path }) {
+            _ = try? BookmarkManager.shared.saveBookmark(for: workspaceDir, customName: "3105 Workspace")
+        }
+
+        return pbWorkspace
+    }
 }
 
 enum WallpaperDescriptorIdentity {
@@ -639,63 +705,5 @@ enum WallpaperDescriptorRewriter {
         } catch {
             throw WallpaperLabError.unsupportedPackage
         }
-    }
-
-    @discardableResult
-    static func prepareIOS27WorkspaceFallbackContainerIfNeeded() throws -> URL {
-        let docs = try FileManager.default.url(
-            for: .documentDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let pbWorkspace = docs.appendingPathComponent("PosterBoard_Workspace/com.apple.PosterBoard", isDirectory: true)
-        let extensions = [
-            "com.apple.WallpaperKit.CollectionsPoster",
-            "com.apple.PhotosUIPrivate.PhotosPosterProvider",
-            "com.apple.MercuryPoster"
-        ]
-        for ext in extensions {
-            let storeURL = pbWorkspace
-                .appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore/72/Extensions/\(ext)/descriptors", isDirectory: true)
-            try FileManager.default.createDirectory(at: storeURL, withIntermediateDirectories: true)
-        }
-
-        let metadataPath = pbWorkspace.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
-        if !FileManager.default.fileExists(atPath: metadataPath.path) {
-            let metadataPlist = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>MCMMetadataIdentifier</key>
-                <string>com.apple.PosterBoard</string>
-                <key>MCMMetadataInfo</key>
-                <dict>
-                    <key>CFBundleDisplayName</key>
-                    <string>PosterBoard</string>
-                    <key>CFBundleName</key>
-                    <string>PosterBoard</string>
-                </dict>
-            </dict>
-            </plist>
-            """
-            try? metadataPlist.write(to: metadataPath, atomically: true, encoding: .utf8)
-        }
-
-        // Register in BookmarkManager if not already registered
-        let mounted = BookmarkManager.shared.mountedFolders
-        if !mounted.contains(where: { $0.path == pbWorkspace.path }) {
-            _ = try? BookmarkManager.shared.saveBookmark(for: pbWorkspace, customName: "PosterBoard (iOS 27 Workspace)")
-        }
-
-        // Also ensure Workspace folder exists and is mounted
-        let workspaceDir = docs.appendingPathComponent("Workspace", isDirectory: true)
-        try? FileManager.default.createDirectory(at: workspaceDir, withIntermediateDirectories: true)
-        if !mounted.contains(where: { $0.path == workspaceDir.path }) {
-            _ = try? BookmarkManager.shared.saveBookmark(for: workspaceDir, customName: "3105 Workspace")
-        }
-
-        return pbWorkspace
     }
 }

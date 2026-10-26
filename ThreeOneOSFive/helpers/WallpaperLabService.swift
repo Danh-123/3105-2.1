@@ -16,7 +16,7 @@ enum WallpaperAccessProbe {
         requiredExtensionIdentifiers: Set<String>? = nil,
         fileManager: FileManager = .default
     ) throws -> WallpaperAccessReport {
-        let layout = try WallpaperLayoutScanner.scan(
+        var layout = try WallpaperLayoutScanner.scan(
             containerURL: containerURL,
             rootValidator: rootValidator,
             fileManager: fileManager
@@ -50,7 +50,6 @@ enum WallpaperAccessProbe {
         } else {
             requiredIdentifiers = layout.extensionDescriptorDirectories.keys.sorted()
         }
-        var layout = layout
         var deniedIdentifiers: [String] = []
         for identifier in requiredIdentifiers {
             if layout.extensionDescriptorDirectories[identifier] == nil {
